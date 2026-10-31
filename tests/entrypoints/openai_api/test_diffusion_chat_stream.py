@@ -165,7 +165,6 @@ def test_diffusion_stream_generator_signature_has_modality() -> None:
     assert "audio_metadata" in params
 
 
-
 @pytest.mark.parametrize("diffusion_client", ["audio"], indirect=True)
 def test_diffusion_chat_stream_preserves_missing_audio_error(diffusion_client: TestClient) -> None:
     diffusion_client.app.state.engine_client.output.multimodal_output.pop("audio")
