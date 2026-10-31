@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 
+import inspect
 import json
 from argparse import Namespace
 from collections.abc import AsyncGenerator, Iterator
@@ -156,6 +157,13 @@ def test_diffusion_chat_stream_uses_image_choice_for_layered_images(diffusion_cl
     assert len(content) == 2
     image_choice.assert_called_once()
     assert image_choice.call_args.kwargs["stream"] is True
+
+
+def test_diffusion_stream_generator_signature_has_modality() -> None:
+    params = inspect.signature(OmniOpenAIServingChat._diffusion_chat_completion_stream_generator).parameters
+    assert "modality" in params
+    assert "audio_metadata" in params
+
 
 
 @pytest.mark.parametrize("diffusion_client", ["audio"], indirect=True)
