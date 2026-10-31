@@ -3128,7 +3128,7 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
 
         # First check omni_outputs.images directly (for diffusion mode via from_diffusion)
         if omni_outputs.images:
-            images = self._flatten_diffusion_images(omni_outputs.images)
+            images = OmniOpenAIServingChat._flatten_diffusion_images(omni_outputs.images)
         # Fall back to completion outputs for pipeline mode (multimodal_output
         # is attached to CompletionOutput by AR stages).
         elif omni_outputs.outputs:
