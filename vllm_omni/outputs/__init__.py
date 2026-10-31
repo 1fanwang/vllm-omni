@@ -57,6 +57,7 @@ class OmniConnectorOutput:
     stage_recv_req_ids: set[str] = field(default_factory=set)
     has_pending_kv_work: bool = False
     stage_payloads: dict[str, bytes] = field(default_factory=dict)
+    send_failures: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass

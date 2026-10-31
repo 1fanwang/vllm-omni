@@ -1178,6 +1178,7 @@ class OmniGenerationScheduler(OmniSchedulerMixin, VLLMScheduler):
         # outputs in this step.
         engine_core_outputs = {client_index: EngineCoreOutputs(outputs=outs) for client_index, outs in outputs.items()}
 
+        self._consume_model_runner_send_failures(model_runner_output)
         self._attach_finished_request_sets(
             engine_core_outputs,
             synthesize_abort_outputs=False,

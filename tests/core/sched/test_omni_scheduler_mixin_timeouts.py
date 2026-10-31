@@ -421,5 +421,41 @@ def test_a_rejected_value_does_not_outlive_its_test(monkeypatch):
     assert mod.DEFAULT_INPUT_WAIT_TIMEOUT_S == ambient
 
 
+def test_connector_send_failures_emit_error_output_for_departed_and_live_requests() -> None:
+    from vllm.v1.engine import FinishReason
+
+    from vllm_omni.outputs import OmniConnectorOutput
+
+    live_req = Request(
+        request_id="req-live",
+        prompt_token_ids=[1],
+        sampling_params=SamplingParams(max_tokens=1),
+        pooling_params=None,
+        client_index=1,
+    )
+    scheduler = _FakeScheduler({"req-live": live_req}, _FakeCoordinator(set()))
+    scheduler._recent_client_index = {"req-departed": 2}
+    scheduler.finished_req_ids_dict = {}
+
+    runner_output = SimpleNamespace(
+        omni_connector_output=OmniConnectorOutput(
+            send_failures={
+                "req-live": "connector send failed permanently for request 'req-live'",
+                "req-departed": "connector send failed permanently for request 'req-departed'",
+            }
+        )
+    )
+    scheduler._consume_model_runner_send_failures(runner_output)
+
+    assert scheduler.finish_calls and scheduler.finish_calls[0][0] == {"req-live"}
+    outputs: dict[int, EngineCoreOutputs] = {}
+    scheduler._attach_finished_request_sets(outputs, synthesize_abort_outputs=False)
+
+    assert outputs[1].outputs[0].request_id == "req-live"
+    assert outputs[1].outputs[0].finish_reason == FinishReason.ERROR
+    assert outputs[2].outputs[0].request_id == "req-departed"
+    assert outputs[2].outputs[0].finish_reason == FinishReason.ERROR
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -459,6 +459,7 @@ class _OmniConnectorPayloadTransportMixin(_OmniConnectorRuntimeMixin):
             or output.stage_recv_req_ids
             or output.has_pending_kv_work
             or output.stage_payloads
+            or output.send_failures
         )
 
     def attach_omni_connector_output(self, result: Any | None) -> Any:
@@ -792,6 +793,7 @@ class _OmniConnectorPayloadTransportMixin(_OmniConnectorRuntimeMixin):
             )
             return list(outputs.keys())
         sent_ids: list[str] = []
+        completions: list[Any] = []
         next_stage_id = self._next_stage_id
         for req_id, value in outputs.items():
             if isinstance(value, tuple) and len(value) == 2:
@@ -838,6 +840,10 @@ class _OmniConnectorPayloadTransportMixin(_OmniConnectorRuntimeMixin):
             self._put_req_chunk[req_id] += 1
             self._ramp_chunk_count[req_id] += 1
             connector_put_key = f"{external_req_id}_{self._stage_id}_{chunk_id}"
+            completion = self._create_send_completion(
+                request_id=req_id,
+                put_key=connector_put_key,
+            )
 
             logger.debug(
                 "[Stage-%s] send_full_payload_outputs: enqueue req=%s put_key=%s next_stage=%s",
@@ -852,13 +858,23 @@ class _OmniConnectorPayloadTransportMixin(_OmniConnectorRuntimeMixin):
                 "put_key": connector_put_key,
                 "data": payload,
                 "request_id": req_id,
+                "completion": completion,
             }
             with self._lock:
                 self._pending_save_reqs.setdefault(req_id, deque()).append(task)
                 self._pending_save_counts[req_id] += 1
             sent_ids.append(req_id)
+            if completion is not None:
+                completions.append(completion)
         if sent_ids:
             self._save_work_available.set()
+            save_thread = getattr(self, "_save_thread", None)
+            if save_thread is not None and save_thread.is_alive():
+                for completion in completions:
+                    try:
+                        completion.wait()
+                    except Exception:
+                        pass
         return sent_ids
 
     # ------------------------------------------------------------------ #
@@ -1103,6 +1119,12 @@ class _OmniConnectorPayloadTransportMixin(_OmniConnectorRuntimeMixin):
                 req_id,
                 self._MAX_SEND_RETRIES,
             )
+            with self._lock:
+                send_failures = getattr(self, "_send_failures", None)
+                if send_failures is None:
+                    send_failures = {}
+                    self._send_failures = send_failures
+                send_failures.setdefault(req_id, str(failure))
             sink = getattr(self, "_connector_send_error_sink", None)
             if sink is not None:
                 try:
@@ -1113,6 +1135,7 @@ class _OmniConnectorPayloadTransportMixin(_OmniConnectorRuntimeMixin):
             if completion is not None:
                 completion.set_error(failure)
             self._decrement_pending_save_count(req_id)
+            self.publish_omni_connector_output_to_sink()
 
     # ------------------------------------------------------------------ #
     #  Chunk-level poll / send  (ported from OmniChunkTransferAdapter)
@@ -1557,6 +1580,12 @@ class _OmniConnectorPayloadTransportMixin(_OmniConnectorRuntimeMixin):
         self._chunk_ready_req_ids.update(newly_finished)
         with self._lock:
             stage_payloads, self._run_stage_payloads = self._run_stage_payloads, {}
+            raw_send_failures = getattr(self, "_send_failures", None)
+            if raw_send_failures:
+                send_failures = dict(raw_send_failures)
+                raw_send_failures.clear()
+            else:
+                send_failures = {}
 
         output = OmniConnectorOutput(
             chunk_ready_req_ids=set(self._chunk_ready_req_ids),
@@ -1566,6 +1595,7 @@ class _OmniConnectorPayloadTransportMixin(_OmniConnectorRuntimeMixin):
             stage_recv_req_ids=set(self._stage_recv_req_ids),
             has_pending_kv_work=self.has_pending_kv_work(),
             stage_payloads=stage_payloads,
+            send_failures=send_failures,
         )
         if output.stage_recv_req_ids or chunk_finished or newly_finished:
             logger.debug(

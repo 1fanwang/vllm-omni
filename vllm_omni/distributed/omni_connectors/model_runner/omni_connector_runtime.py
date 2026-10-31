@@ -137,6 +137,7 @@ class _OmniConnectorRuntimeMixin:
     _pending_save_reqs: dict[str, deque[Any]]
     _pending_save_counts: dict[str, int]
     _deferred_send_cleanup: set[str]
+    _send_failures: dict[str, str]
     _chunk_ready_req_ids: set[str]
     _chunk_finished_req_ids: set[str]
     _stage_recv_req_ids: set[str]
@@ -279,6 +280,7 @@ class _OmniConnectorRuntimeMixin:
         self._pending_save_reqs: dict[str, deque] = {}
         self._pending_save_counts: dict[str, int] = defaultdict(int)
         self._deferred_send_cleanup: set[str] = set()
+        self._send_failures: dict[str, str] = {}
         self._connector_send_error_sink: Callable[[BaseException], None] | None = None
         # -- per-cycle output accumulator --
         self._chunk_ready_req_ids: set[str] = set()

@@ -430,6 +430,8 @@ class OmniSchedulerMixin(_SchedulerMixinBase):
             for req_id, stage_payload in output.stage_payloads.items():
                 if req_id in awaiting:
                     awaiting[req_id][1].stage_payload = stage_payload
+            if getattr(output, "send_failures", None):
+                self._record_connector_send_failures(output.send_failures)
 
         input_coordinator = getattr(self, "input_coordinator", None)
         if input_coordinator is None:
@@ -572,6 +574,50 @@ class OmniSchedulerMixin(_SchedulerMixinBase):
                 ),
             )
         self.finish_requests(request_ids, RequestStatus.FINISHED_ERROR)
+
+    def _record_connector_send_failures(self, send_failures: Mapping[str, str]) -> None:
+        if not send_failures:
+            return
+        pending = getattr(self, "_pending_input_timeout_outputs", None)
+        if pending is None:
+            pending = self._pending_input_timeout_outputs = {}
+        awaiting = getattr(self, "_outputs_awaiting_stage_payload", None)
+        recent_clients = getattr(self, "_recent_client_index", None)
+        live_ids_to_finish: set[str] = set()
+        for request_id, reason in send_failures.items():
+            request = self.requests.get(request_id)
+            held = awaiting.pop(request_id, None) if awaiting is not None else None
+            remembered_client = recent_clients.pop(request_id, 0) if recent_clients is not None else 0
+            client_index = (
+                request.client_index
+                if request is not None
+                else (held[0] if held is not None else remembered_client)
+            )
+            if request is not None:
+                request.stop_reason = reason
+                live_ids_to_finish.add(request_id)
+            pending[request_id] = (
+                client_index,
+                OmniEngineCoreOutput(
+                    request_id=request_id,
+                    new_token_ids=[],
+                    finish_reason=FinishReason.ERROR,
+                    stop_reason=reason,
+                ),
+            )
+        if live_ids_to_finish:
+            self.finish_requests(live_ids_to_finish, RequestStatus.FINISHED_ERROR)
+
+    def _consume_model_runner_send_failures(self, model_runner_output: Any) -> None:
+        omni_output = getattr(model_runner_output, "omni_connector_output", None)
+        if omni_output is None:
+            return
+        send_failures = getattr(omni_output, "send_failures", None)
+        if not send_failures:
+            return
+        drained = dict(send_failures)
+        send_failures.clear()
+        self._record_connector_send_failures(drained)
 
     def reset_prefix_cache(self, reset_running_requests: bool = False, reset_connector: bool = False) -> bool:
         # Upstream uses drop_stale_output for both reset and KV-delivery
@@ -906,6 +952,13 @@ class OmniSchedulerMixin(_SchedulerMixinBase):
             request,
             **output_fields,
         )
+        if output.finish_reason is not None:
+            recent = getattr(self, "_recent_client_index", None)
+            if recent is None:
+                recent = self._recent_client_index = {}
+            elif len(recent) >= 1024:
+                recent.pop(next(iter(recent)))
+            recent[request.request_id] = request.client_index
         if output.finish_reason in (FinishReason.STOP, FinishReason.LENGTH) and returns_stage_payload(
             request.additional_information
         ):
@@ -915,7 +968,11 @@ class OmniSchedulerMixin(_SchedulerMixinBase):
 
     def has_requests(self) -> bool:
         """Keep stepping while a finished run request's output waits for its stage payload."""
-        return bool(self._outputs_awaiting_stage_payload) or super().has_requests()
+        return (
+            bool(self._outputs_awaiting_stage_payload)
+            or bool(getattr(self, "_pending_input_timeout_outputs", None))
+            or super().has_requests()
+        )
 
     def _handle_failed_kv_load_outputs(
         self,
